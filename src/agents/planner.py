@@ -3,6 +3,9 @@ from src.services.azure_client import AzureOpenAIClient
 from src.core.config import Config
 from . import get_prompt
 import logging
+import json
+import re
+from loguru import logger
 
 # Initialize services
 config = Config()
@@ -23,95 +26,71 @@ def plan_research(context_variables, query: str):
         # Get relevant context from knowledge base
         from src.core.knowledge_base import KnowledgeBase
         kb = KnowledgeBase(
-            host=config.get('qdrant.host'),
-            port=config.get('qdrant.port'),
-            collection_name=config.get('qdrant.collection_name')
+            qdrant_url=config.get('qdrant.url', 'http://localhost:6333'),
+            collection_name=config.get('qdrant.collection_name', 'research_knowledge')
         )
         context = kb.get_relevant_context(query)
 
         # Compose LLM prompt for agent-assigned planning
         planning_prompt = f"""
-You are an expert AI project planner. Given the following user query, break it down into a step-by-step plan. For each step, explicitly assign the responsible agent (choose from: Researcher, Coder, Formatter, Answer, Runner, Reporter, Patcher, InternalMonologue). For each step, provide:
-- agent: The responsible agent
-- task: The specific task or sub-question
-- reasoning: Why this step is needed and why this agent is best for it
-
-Also provide a summary and focus area for the overall plan.
-
-**IMPORTANT:**
-- Always return a valid JSON list of steps, plus a summary and focus_area field at the end.
-- Never return plain text, markdown, or any other format.
-- If you are unsure, output an empty JSON list.
-
-User Query:
-{query}
-
-Relevant Context:
-{context}
-
-Format your response as a JSON list of steps, each with 'agent', 'task', and 'reasoning', plus a 'summary' and 'focus_area' field at the end.
+You are a Planner Agent tasked with decomposing a user query into actionable steps for other agents.
+The query is: "{query}"
+Return a JSON object with the following structure:
+{{
+    "steps": [
+        {{
+            "step_number": int,
+            "description": str,
+            "agent": str,
+            "reasoning": str
+        }}
+    ]
+}}
+Ensure the response is valid JSON and includes clear, concise steps for agents like Researcher, Coder, Formatter, Runner, and Reporter.
+Do not include any text before or after the JSON. Only output the JSON object.
 """
-        llm_response = azure_client.generate_plan(planning_prompt, context)
-        # Try to parse the LLM response as JSON
-        import json
-        import re
+        llm_response = azure_client.generate_plan(planning_prompt, context_variables.get('research_context', ''))
+        logger.info(f"Raw LLM response: {llm_response}")
         try:
-            plan_struct = json.loads(llm_response)
-        except Exception as e:
-            logger.warning(f"Failed to parse LLM plan as JSON: {e}. Attempting to extract JSON from output.")
-            # Try to extract JSON from the LLM output using regex
-            json_match = re.search(r'(\[.*?\]|\{.*?\})', llm_response, re.DOTALL)
-            if json_match:
+            plan = json.loads(llm_response)
+        except json.JSONDecodeError as e:
+            logger.warning(f"Failed to parse LLM plan as JSON: {e}. Attempting to extract JSON.")
+            match = re.search(r'\{.*\}', llm_response, re.DOTALL)
+            if match:
                 try:
-                    plan_struct = json.loads(json_match.group(0))
+                    plan = json.loads(match.group(0))
                 except Exception as e2:
-                    logger.warning(f"Failed to extract JSON from LLM output: {e2}. Falling back to raw text.")
-                    plan_struct = llm_response
+                    logger.error(f"Could not extract valid JSON. Retrying with fallback plan. {e2}")
+                    plan = None
             else:
-                plan_struct = llm_response
-
-        # Extract search queries for the researcher
-        search_queries = []
-        if isinstance(plan_struct, list):
-            for step in plan_struct:
-                if isinstance(step, dict) and step.get('agent', '').lower() == 'researcher':
-                    search_queries.append(step.get('task', ''))
-        else:
-            # Fallback: try to extract lines for researcher
-            import re
-            search_queries = re.findall(r'Researcher.*?: (.*)', str(plan_struct))
-
-        # Update context variables
-        context_variables['plan'] = plan_struct
-        context_variables['search_queries'] = search_queries
-        context_variables['research_context'] = context
-        context_variables['plan_summary'] = plan_struct.get('summary', '') if isinstance(plan_struct, dict) else ''
-        context_variables['plan_focus_area'] = plan_struct.get('focus_area', '') if isinstance(plan_struct, dict) else ''
-
-        # Log the interaction
-        if 'session_id' in context_variables:
-            from src.core.database import Database
-            db = Database(config.get('database.path'))
-            db.log_agent_interaction(
-                session_id=context_variables['session_id'],
-                agent_name="Planner",
-                action="generate_plan",
-                result=str(plan_struct)
-            )
-
-        # Hand off to researcher
-        from .researcher import researcher_agent
-        return researcher_agent
-
+                plan = None
+        if not plan or not isinstance(plan, dict):
+            plan = {
+                "steps": [
+                    {
+                        "step_number": 1,
+                        "description": f"Research the query: {query}",
+                        "agent": "Researcher",
+                        "reasoning": "Gather foundational information to address the query."
+                    }
+                ]
+            }
+        context_variables['plan'] = plan
+        return plan
     except Exception as e:
-        logger.error(f"Error in planner: {e}")
-        # Fallback to simple plan
-        context_variables['plan'] = [
-            {"agent": "Researcher", "task": f"Research: {query}", "reasoning": "Default to research if planning fails."}
-        ]
-        context_variables['search_queries'] = [query]
-        from .researcher import researcher_agent
-        return researcher_agent
+        logger.error(f"Error in Planner Agent: {e}")
+        plan = {
+            "steps": [
+                {
+                    "step_number": 1,
+                    "description": f"Research the query: {query}",
+                    "agent": "Researcher",
+                    "reasoning": "Default to research if planning fails."
+                }
+            ]
+        }
+        context_variables['plan'] = plan
+        return plan
 
 planner_agent = Agent(
     name="Planner Agent",

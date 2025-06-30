@@ -14,28 +14,66 @@ except ImportError:
 
 logger = logging.getLogger(__name__)
 
+def build_structured_report(context_variables):
+    """
+    Build a single, structured report with Introduction, Theory, Formula, Python Code, Usage Example, and Sources.
+    """
+    intro = context_variables.get('intro', '')
+    theory = context_variables.get('theory', '')
+    formula = context_variables.get('formula', '')
+    usage = context_variables.get('usage', '')
+    sources = context_variables.get('sources', '')
+    code = context_variables.get('generated_code', '')
+    # Fallbacks: try to extract from formatted_research or answer if not present
+    if not intro:
+        intro = context_variables.get('answer', '')
+    if not theory:
+        theory = context_variables.get('formatted_research', '')
+    if not formula:
+        formula = context_variables.get('formula', '')
+    if not usage:
+        usage = context_variables.get('usage', '')
+    if not sources:
+        sources = context_variables.get('sources', '')
+    # Build the report
+    report = f"""
+# Volatility Index (VIX): Explanation, Formula, and Python Code
+
+## Introduction
+{intro}
+
+## Theory/Background
+{theory}
+
+## Mathematical Formula
+{formula}
+
+## Python Code
+```python
+{code}
+```
+
+## Usage Example
+{usage}
+
+## Sources
+{sources}
+"""
+    return report
+
 def generate_report(context_variables):
     """
     Generate a comprehensive report summarizing the project and export to PDF, TXT, DOCX, or code file as requested.
-    Accepts 'export_format' and 'export_path' in context_variables.
     Preserves Markdown structure and code blocks as best as possible.
     """
-    report_content = context_variables.get('final_answer', '') or context_variables.get('answer', '') or context_variables.get('project_report', '')
-    # Fallbacks for empty report_content
-    if not report_content:
-        report_content = context_variables.get('answer', '')
-    if not report_content:
-        report_content = context_variables.get('formatted_research', '')
-    # Always use the latest code for export
-    code_content = context_variables.get('current_code') or context_variables.get('generated_code', '')
+    # Build a single, structured report
+    report_content = build_structured_report(context_variables)
+    code_content = context_variables.get('generated_code', '')
     export_format = context_variables.get('export_format', 'txt').lower()
     export_dir = context_variables.get('export_path', 'exports')
     os.makedirs(export_dir, exist_ok=True)
     base_name = context_variables.get('export_name', 'research_report')
     exported_files = []
-    # If answer_chunks exist, concatenate for export
-    if 'answer_chunks' in context_variables and context_variables['answer_chunks']:
-        report_content = ''.join(context_variables['answer_chunks'])
     try:
         # Export main report
         if export_format == 'pdf':

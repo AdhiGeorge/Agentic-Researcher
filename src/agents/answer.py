@@ -15,11 +15,7 @@ azure_client = AzureOpenAIClient(
 )
 logger = logging.getLogger(__name__)
 
-kb = KnowledgeBase(
-    host=config.get('qdrant.host'),
-    port=config.get('qdrant.port'),
-    collection_name=config.get('qdrant.collection_name')
-)
+kb = KnowledgeBase(qdrant_url='http://localhost:6333', collection_name='research_knowledge')
 
 def get_non_code_text_length(markdown_text):
     # Find the first code block

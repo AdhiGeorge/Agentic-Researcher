@@ -2,6 +2,7 @@ import yaml
 from openai import AzureOpenAI
 from typing import Optional
 import os
+from loguru import logger
 
 PROMPT_FILE = "prompts.yaml"
 
@@ -89,4 +90,32 @@ class AzureOpenAIClient:
         ]
         
         response = self.chat_completion(messages, temperature=0.3)
-        return response.choices[0].message.content 
+        return response.choices[0].message.content
+
+    def get_completion(self, prompt: str, max_tokens: int = 16384) -> str:
+        try:
+            response = self.client.chat.completions.create(
+                model="gpt-4o",
+                messages=[{"role": "user", "content": prompt}],
+                max_tokens=max_tokens,
+                stream=True
+            )
+            result = ""
+            for chunk in response:
+                if chunk.choices[0].delta.content:
+                    result += chunk.choices[0].delta.content
+            return result
+        except Exception as e:
+            logger.error(f"Azure OpenAI error: {e}")
+            # Fallback to non-streaming
+            try:
+                response = self.client.chat.completions.create(
+                    model="gpt-4o",
+                    messages=[{"role": "user", "content": prompt}],
+                    max_tokens=max_tokens,
+                    stream=False
+                )
+                return response.choices[0].message.content
+            except Exception as e2:
+                logger.error(f"Azure OpenAI fallback error: {e2}")
+                return "" 

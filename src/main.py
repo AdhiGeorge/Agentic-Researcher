@@ -17,6 +17,7 @@ from rich.text import Text
 from src.agents.mother import MotherAgent
 from rich.syntax import Syntax
 import re
+from src.agents.interaction import InteractionAgent
 
 console = Console()
 
@@ -145,9 +146,22 @@ def save_session_json(session_name, history):
 def main():
     console.print("[bold cyan]Welcome to Agentres, an Agentic Researcher![/bold cyan]")
     mother = MotherAgent()
+    # Initialize dependencies for InteractionAgent
+    config = Config()
+    azure_client = AzureOpenAIClient(
+        api_key=config.get('azure_openai.api_key'),
+        endpoint=config.get('azure_openai.endpoint'),
+        api_version=config.get('azure_openai.api_version'),
+        deployment_name=config.get('azure_openai.deployment_name')
+    )
+    knowledge_base = KnowledgeBase(qdrant_url='http://localhost:6333', collection_name='research_knowledge')
+    # You must provide actual agent instances for runner/coder, etc. Here we use AGENTS registry as a placeholder
+    agents = AGENTS  # Should be a dict like {'runner': ..., 'coder': ...}
+    interaction_agent = InteractionAgent(agents, knowledge_base, azure_client)
     context = None
     history = []
     session_name = None
+    session_id = None
     while True:
         if not context:
             user_query = Prompt.ask("[bold yellow]Enter your research question[/bold yellow]")
@@ -171,12 +185,15 @@ def main():
                 save_session_json(session_name, history)
                 break
             else:
-                # Always treat as a natural language follow-up command
-                context['is_followup'] = True
-                context, new_history = mother.run(user_input, context)
-                for step in new_history:
-                    print_agent_section(step["agent"], step["output"], step["color"], context)
-                    history.append(step)
+                # Use the new InteractionAgent for follow-up commands
+                result = interaction_agent.handle_follow_up(user_input, session_id)
+                # Print the result in a consistent way
+                if result.get("status") == "success":
+                    print_agent_section("Interaction", result.get("output", ""), "cyan", context)
+                else:
+                    print_agent_section("Interaction", result.get("error", "Unknown error."), "red", context)
+                # Optionally, append to history
+                history.append({"agent": "Interaction", "output": result.get("output", result.get("error", "")), "color": "cyan" if result.get("status") == "success" else "red"})
                 save_session_json(session_name, history)
                 continue
 

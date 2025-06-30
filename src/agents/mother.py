@@ -258,7 +258,7 @@ class MotherAgent:
         # Store in Knowledge Base
         try:
             from src.core.knowledge_base import KnowledgeBase
-            kb = KnowledgeBase()
+            kb = KnowledgeBase(qdrant_url='http://localhost:6333', collection_name='research_knowledge')
             point_ids = kb.add_research_result(user_query, answer_text, context_variables.get('sources', []), context_variables.get('session_id'))
             history.append({"agent": "KnowledgeBase", "type": "storage", "color": "blue", "output": f"Stored research result in KB with point_ids: {point_ids}"})
         except Exception as e:

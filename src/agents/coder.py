@@ -3,6 +3,8 @@ from src.services.azure_client import AzureOpenAIClient
 from src.core.config import Config
 from . import get_prompt
 import logging
+import black
+import ast
 
 # Initialize services
 config = Config()
@@ -31,22 +33,44 @@ def generate_code(context_variables):
             code_task = step.get('task', '')
             if not code_task:
                 continue
-            if chain_of_thought:
-                cot_prompt = (
-                    (f"Code Feedback (fix these issues): {code_feedback}\n" if code_feedback else "") +
-                    f"Task: {code_task}\n\nResearch Context:\n{formatted_research}\n\nGenerate professional, well-documented code for the above task. Think step by step, show your intermediate reasoning, and explain your thought process before giving the final code."
+            vix_instructions = ""
+            if 'vix' in code_task.lower() or 'vix' in user_query.lower():
+                vix_instructions = (
+                    "\n\nIMPORTANT: Implement the VIX calculation using the official CBOE formula. "
+                    "You must:\n"
+                    "- Calculate the forward index level F = K_0 + exp(R*T) * (C(K_0) - P(K_0))\n"
+                    "- Use both call and put options\n"
+                    "- Compute strike intervals (ΔK)\n"
+                    "- Apply the formula: VIX = 100 * sqrt((2/T) * Σ(ΔK_i / K_i^2 * exp(RT) * Q(K_i)) - (1/T) * ((F/K_0) - 1)^2)\n"
+                    "- Interpolate for 30-day volatility if multiple expirations are present\n"
+                    "- Use realistic sample data\n"
+                    "- Include error handling and comments\n"
+                    "- Only output valid Python code, no markdown or explanations.\n"
                 )
-                logger.info(f"[Chain-of-Thought] Code step: {code_task}")
-                code = azure_client.generate_code(cot_prompt, formatted_research)
-            else:
-                prompt = (
-                    (f"Code Feedback (fix these issues): {code_feedback}\n" if code_feedback else "") +
-                    f"Task: {code_task}\n\nResearch Context:\n{formatted_research}\n\nGenerate professional, well-documented code for the above task."
-                )
-                code = azure_client.generate_code(prompt, formatted_research)
+            prompt = (
+                (f"Code Feedback (fix these issues): {code_feedback}\n" if code_feedback else "") +
+                f"Task: {code_task}{vix_instructions}\n\nResearch Context:\n{formatted_research}\n\nGenerate professional, well-documented code for the above task. Only output valid Python code, no markdown or explanations."
+            )
+            code = azure_client.generate_code(prompt, formatted_research)
+            code = code.replace('```python', '').replace('```', '').strip()
+            try:
+                code = black.format_str(code, mode=black.FileMode())
+            except Exception as e:
+                logger.warning(f"Black formatting failed: {e}")
+            try:
+                ast.parse(code)
+            except SyntaxError as e:
+                logger.error(f"Syntax error in generated code: {e}")
+                cleaned_code = code.replace('\\n', '\n').strip()
+                try:
+                    ast.parse(cleaned_code)
+                    code = cleaned_code
+                except SyntaxError:
+                    logger.error("Failed to fix syntax error in generated code.")
+                    code = f"# Code generation failed due to syntax error: {e}\n# Original code:\n{code}"
             generated_code_blocks.append(code)
         if generated_code_blocks:
-            context_variables['generated_code'] = '\n\n'.join(generated_code_blocks)
+            context_variables['generated_code'] = generated_code_blocks[0]  # Only one code block
         else:
             context_variables['generated_code'] = ''
         return context_variables['generated_code']

@@ -10,15 +10,12 @@ from src.core.config import Config
 import re
 
 class KnowledgeBase:
-    def __init__(self, host: str = "localhost", port: int = 6333, collection_name: str = "research_knowledge"):
-        self.host = host
-        self.port = port
+    def __init__(self, qdrant_url: str = 'http://localhost:6333', collection_name: str = 'research_knowledge'):
+        self.qdrant_client = QdrantClient(url=qdrant_url)
+        self.sentence_transformer = SentenceTransformer('all-MiniLM-L6-v2')
         self.collection_name = collection_name
-        self.embedding_model = SentenceTransformer('all-MiniLM-L6-v2')
         self.chunk_size = 800  # tokens/chars, adjust for your embedding model
-        self._ensure_qdrant_running()
-        self.client = QdrantClient(host=host, port=port)
-        self._ensure_collection()
+        # self._ensure_qdrant_running()  # DISABLED: not compatible with URL-based config
     
     def _ensure_qdrant_running(self):
         """Ensure Qdrant is running locally using the binary from config.yaml"""
@@ -83,7 +80,7 @@ class KnowledgeBase:
         chunks = self._chunk_text(text, chunk_size)
         point_ids = []
         for i, chunk in enumerate(chunks):
-            embedding = self.embedding_model.encode(chunk).tolist()
+            embedding = self.sentence_transformer.encode(chunk).tolist()
             point_id = str(uuid.uuid4())
             payload = {
                 "text": chunk,
@@ -96,7 +93,7 @@ class KnowledgeBase:
                 vector=embedding,
                 payload=payload
             )
-            self.client.upsert(
+            self.qdrant_client.upsert(
                 collection_name=self.collection_name,
                 points=[point]
             )
@@ -106,10 +103,10 @@ class KnowledgeBase:
     def search_knowledge(self, query: str, limit: int = 5) -> List[Dict]:
         """Search for relevant knowledge based on a query"""
         # Generate query embedding
-        query_embedding = self.embedding_model.encode(query).tolist()
+        query_embedding = self.sentence_transformer.encode(query).tolist()
         
         # Search in collection
-        search_result = self.client.search(
+        search_result = self.qdrant_client.search(
             collection_name=self.collection_name,
             query_vector=query_embedding,
             limit=limit
@@ -153,7 +150,48 @@ class KnowledgeBase:
     
     def delete_knowledge(self, point_id: str):
         """Delete a piece of knowledge from the database"""
-        self.client.delete(
+        self.qdrant_client.delete(
             collection_name=self.collection_name,
             points_selector=[point_id]
-        ) 
+        )
+
+    def store_research(self, research_data: str, query: str, session_id: str):
+        """Store research data with query and session_id."""
+        embedding = self.sentence_transformer.encode(research_data)
+        point = {
+            "id": str(uuid.uuid4()),
+            "vector": embedding.tolist(),
+            "payload": {"query": query, "session_id": session_id, "data": research_data}
+        }
+        self.qdrant_client.upsert(collection_name=self.collection_name, points=[point])
+
+    def retrieve_research(self, query: str, session_id: str = None, limit: int = 5) -> list:
+        """Retrieve research by query and/or session_id using semantic search."""
+        query_embedding = self.sentence_transformer.encode(query)
+        search_result = self.qdrant_client.search(
+            collection_name=self.collection_name,
+            query_vector=query_embedding.tolist(),
+            limit=limit,
+            query_filter={"must": [{"key": "session_id", "match": {"value": session_id}}]} if session_id else None
+        )
+        return [hit.payload["data"] for hit in search_result]
+
+    def retrieve_code(self, session_id: str) -> str:
+        """Retrieve code by session_id."""
+        search_result = self.qdrant_client.search(
+            collection_name=self.collection_name,
+            query_vector=self.sentence_transformer.encode("Python code").tolist(),
+            limit=1,
+            query_filter={"must": [{"key": "session_id", "match": {"value": session_id}}]}
+        )
+        return search_result[0].payload["data"] if search_result else ""
+
+    def retrieve_report(self, session_id: str) -> str:
+        """Retrieve report by session_id."""
+        search_result = self.qdrant_client.search(
+            collection_name=self.collection_name,
+            query_vector=self.sentence_transformer.encode("report").tolist(),
+            limit=1,
+            query_filter={"must": [{"key": "session_id", "match": {"value": session_id}}]}
+        )
+        return search_result[0].payload["data"] if search_result else "" 

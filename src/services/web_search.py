@@ -13,6 +13,9 @@ import random
 import json
 from src.core.query_sanitizer import sanitize_query
 import logging
+from src.core.knowledge_base import KnowledgeBase
+from src.core.config import Config
+config = Config()
 
 logger = logging.getLogger(__name__)
 
@@ -63,7 +66,28 @@ class WebSearchService:
         self.google_api_key = os.getenv('GOOGLE_API_KEY')
         self.google_cse_id = os.getenv('GOOGLE_CSE_ID')
         self.google_search = GoogleSearchAPI(self.google_api_key, self.google_cse_id, self.max_results, self.timeout)
+        # Initialize knowledge base for caching
+        self.kb = KnowledgeBase(
+            qdrant_url=config.get('qdrant.url', 'http://localhost:6333'),
+            collection_name=config.get('qdrant.collection_name', 'research_knowledge')
+        )
     
+    def get_cached_results(self, query: str, session_id: str = None) -> list:
+        cached = self.kb.retrieve_research(query, session_id=session_id, limit=1)
+        if cached:
+            logger.info(f"[WebSearchService] Using cached search results for query: '{query}'")
+            try:
+                return json.loads(cached[0]) if isinstance(cached[0], str) else cached[0]
+            except Exception:
+                return cached[0]
+        return []
+
+    def cache_results(self, query: str, results: list, session_id: str = None):
+        try:
+            self.kb.store_research(json.dumps(results), query, session_id or "websearch")
+        except Exception as e:
+            logger.warning(f"[WebSearchService] Failed to cache results: {e}")
+
     def search_tavily(self, query: str) -> List[Dict]:
         """Search using Tavily API as a fallback."""
         if not self.tavily_api_key:
@@ -113,21 +137,37 @@ class WebSearchService:
             return []
         return self.google_search.search(query)
 
-    def search(self, query: str) -> List[Dict]:
-        """Sanitize query, then try DuckDuckGo search, fallback to Tavily, then Google if all retries fail."""
+    def search(self, query: str, session_id: str = None) -> List[Dict]:
         clean_query = sanitize_query(query)
         if not clean_query:
             logger.warning(f"[WebSearchService] Query sanitized to empty or invalid: '{query}'")
             return []
-        try:
-            return self.search_duckduckgo(clean_query)
-        except Exception as e:
-            logger.warning(f"[WebSearchService] DuckDuckGo failed after retries, using Tavily fallback. Error: {e}")
-            tavily_results = self.search_tavily(clean_query)
-            if tavily_results:
-                return tavily_results
-            logger.warning("[WebSearchService] Tavily failed, using Google fallback.")
-            return self.search_google(clean_query)
+        cached = self.get_cached_results(clean_query, session_id)
+        if cached:
+            return cached
+        retries = 3
+        backoff = 1
+        for attempt in range(retries):
+            try:
+                results = self.search_duckduckgo(clean_query)
+                self.cache_results(clean_query, results, session_id)
+                return results
+            except Exception as e:
+                if "Ratelimit" in str(e):
+                    logger.warning(f"Rate limit hit on attempt {attempt + 1}. Retrying in {backoff} seconds.")
+                    time.sleep(backoff)
+                    backoff *= 2
+                else:
+                    logger.error(f"DuckDuckGo search error: {e}. Falling back to Tavily.")
+                    break
+        tavily_results = self.search_tavily(clean_query)
+        if tavily_results:
+            self.cache_results(clean_query, tavily_results, session_id)
+            return tavily_results
+        logger.warning("[WebSearchService] Tavily failed, using Google fallback.")
+        google_results = self.search_google(clean_query)
+        self.cache_results(clean_query, google_results, session_id)
+        return google_results
     
     def extract_pdf_text(self, url: str) -> str:
         """Download and extract text from a PDF URL using PyPDF2"""
