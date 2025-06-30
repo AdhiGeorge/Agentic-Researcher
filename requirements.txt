@@ -1,0 +1,46 @@
+# Core dependencies
+openai
+
+# Azure OpenAI
+azure-identity
+azure-core
+
+# Web scraping and search
+playwright
+duckduckgo-search
+beautifulsoup4
+requests
+
+# Vector database
+qdrant-client
+
+# Embeddings and NLP
+sentence-transformers
+transformers
+
+# Configuration and utilities
+python-dotenv
+PyYAML
+loguru
+
+# Data processing
+pandas
+numpy
+
+# Async support
+aiohttp
+
+# JSON and data serialization
+json5
+pydantic
+
+# Console UI
+rich
+
+# Development and testing
+pytest
+black
+flake8
+
+# Streamlit
+streamlit>=1.32.0 
